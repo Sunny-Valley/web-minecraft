@@ -8,7 +8,7 @@ const Game = () => {
     const [inventory, setInventory] = useState({ wood: 0, stone: 0 });
     const [debugMsg, setDebugMsg] = useState('初始化...');
     
-    // 穿透闭包，让游戏能读取最新 state
+    // 穿透闭包
     const inventoryRef = useRef(inventory);
     useEffect(() => { inventoryRef.current = inventory; }, [inventory]);
 
@@ -26,15 +26,15 @@ const Game = () => {
                     width: 800,
                     height: 600,
                     parent: 'phaser-game',
-                    backgroundColor: '#1a1a1a', // 稍微亮一点的背景，区分黑屏
-                    pixelArt: true,
+                    backgroundColor: '#1a1a1a',
+                    pixelArt: true, // 像素风必开
                     scale: {
                         mode: Phaser.Scale.RESIZE,
                         autoCenter: Phaser.Scale.CENTER_BOTH
                     },
                     physics: {
                         default: 'arcade',
-                        arcade: { debug: false }
+                        arcade: { debug: false } // 改为 true 可以看到红色的碰撞框，方便调试
                     },
                     scene: {
                         preload: preload,
@@ -45,98 +45,111 @@ const Game = () => {
 
                 const game = new Phaser.Game(config);
                 gameRef.current = game;
-                setDebugMsg('引擎加载完成，正在生成世界...');
+                setDebugMsg('点击画面开始游戏');
 
-                // --- 游戏内部变量 ---
+                // --- 游戏变量 ---
                 let player, cursors, wasd, marker;
-                const objectsGroup = []; // 存储所有物体
+                const objectsGroup = []; // 存储所有障碍物
+                const mapSize = 50; // 地图大小 50x50
+                const tileSize = 32;
 
                 function preload() {
-                    // 直接画图，确保素材存在
                     const g = this.make.graphics({ add: false });
                     
-                    // 1. 地面：草 (32x32)
+                    // 1. 地面：草 (带杂色)
                     g.fillStyle(0x4CAF50); g.fillRect(0,0,32,32);
-                    g.fillStyle(0x388E3C); g.fillRect(Math.random()*28, Math.random()*28, 4, 4); // 杂点
+                    g.fillStyle(0x388E3C); for(let i=0;i<4;i++) g.fillRect(Math.random()*28, Math.random()*28, 4, 4);
                     g.generateTexture('t_grass', 32, 32); g.clear();
 
-                    // 2. 地面：水
+                    // 2. 地面：水 (带波纹)
                     g.fillStyle(0x2196F3); g.fillRect(0,0,32,32);
-                    g.fillStyle(0xFFFFFF, 0.5); g.fillRect(5,5,20,5); // 波光
+                    g.fillStyle(0xFFFFFF, 0.4); g.fillRect(5,5,20,4); g.fillRect(10,20,10,4);
                     g.generateTexture('t_water', 32, 32); g.clear();
 
                     // 3. 物体：树
-                    g.fillStyle(0x2E7D32); g.fillCircle(16,16,14);
+                    g.fillStyle(0x2E7D32); g.fillCircle(16,16,14); g.fillStyle(0x1B5E20); g.fillCircle(16,16,8);
                     g.generateTexture('o_tree', 32, 32); g.clear();
 
                     // 4. 物体：石
-                    g.fillStyle(0x9E9E9E); g.fillCircle(16,16,12);
+                    g.fillStyle(0x9E9E9E); g.fillCircle(16,16,12); g.fillStyle(0x616161); g.fillCircle(12,12,6);
                     g.generateTexture('o_rock', 32, 32); g.clear();
                     
                     // 5. 物体：墙
-                    g.fillStyle(0x795548); g.fillRect(2,2,28,28);
-                    g.lineStyle(2, 0x5D4037); g.strokeRect(2,2,28,28);
+                    g.fillStyle(0x795548); g.fillRect(0,0,32,32); g.lineStyle(4, 0x3E2723); g.strokeRect(0,0,32,32);
                     g.generateTexture('o_wall', 32, 32); g.clear();
 
-                    // 6. 玩家
-                    g.fillStyle(0xFFEB3B); g.fillRect(4,4,24,24); // 黄色小人
+                    // 6. 玩家 (黄色方块，加个眼睛标识方向)
+                    g.fillStyle(0xFFEB3B); g.fillRect(4,4,24,24);
                     g.fillStyle(0x000000); g.fillRect(8,8,4,4); g.fillRect(20,8,4,4);
                     g.generateTexture('player', 32, 32);
                 }
 
                 function create() {
-                    setDebugMsg('正在渲染地图...');
-                    this.cameras.main.setBackgroundColor('#2d2d2d'); // 设置背景色
+                    setDebugMsg('正在生成世界...');
+                    this.cameras.main.setBackgroundColor('#2d2d2d');
 
-                    // 简单噪声函数
-                    const noise = (x, y) => Math.sin(x * 0.1 + y * 0.2) + Math.sin(x * 0.3 + y * 0.1) * 0.5;
+                    // 简单的地形算法
+                    const noise = (x, y) => Math.sin(x * 0.15 + y * 0.25) + Math.sin(x * 0.3 + y * 0.1) * 0.5;
 
-                    // --- 生成地图 (使用 Sprite 替代 Tilemap，防止黑屏) ---
-                    const mapSize = 40; // 40x40
-                    const tileSize = 32;
+                    // 记录所有非障碍物的位置，用于出生
+                    const safeSpots = [];
 
-                    // 1. 铺地面
                     for(let y=0; y<mapSize; y++) {
                         for(let x=0; x<mapSize; x++) {
                             const n = noise(x, y);
-                            let texture = 't_grass';
-                            let isWater = false;
-
-                            if (n < -0.5) { texture = 't_water'; isWater = true; }
-
-                            const tile = this.add.image(x * tileSize, y * tileSize, texture).setOrigin(0);
                             
-                            // 如果是水，开启物理碰撞
-                            if (isWater) {
-                                this.physics.add.existing(tile, true); // 静态刚体
-                                objectsGroup.push({ sprite: tile, type: 'water' });
+                            // 1. 生成水 (-0.5 以下)
+                            if (n < -0.5) { 
+                                const water = this.add.image(x * tileSize, y * tileSize, 't_water').setOrigin(0);
+                                this.physics.add.existing(water, true); // 静态碰撞体
+                                objectsGroup.push({ sprite: water, type: 'water' });
+                                continue; // 是水就跳过后续，不能生成树
                             }
 
-                            // 2. 生成物体 (树/石) - 只有草地生成
-                            if (!isWater) {
-                                let objType = null;
-                                if (Math.random() < 0.1) objType = 'o_tree';
-                                else if (Math.random() < 0.03) objType = 'o_rock';
+                            // 2. 生成草
+                            this.add.image(x * tileSize, y * tileSize, 't_grass').setOrigin(0);
+                            let isOccupied = false;
 
-                                if (objType) {
-                                    const obj = this.physics.add.sprite(x * tileSize + 16, y * tileSize + 16, objType);
-                                    obj.setImmovable(true);
-                                    objectsGroup.push({ sprite: obj, type: objType });
-                                }
+                            // 3. 随机生成树和石头
+                            let objType = null;
+                            const rand = Math.random();
+                            if (rand < 0.08) objType = 'o_tree';
+                            else if (rand < 0.11) objType = 'o_rock';
+
+                            if (objType) {
+                                const obj = this.physics.add.sprite(x * tileSize + 16, y * tileSize + 16, objType);
+                                obj.setImmovable(true);
+                                objectsGroup.push({ sprite: obj, type: objType });
+                                isOccupied = true;
+                            }
+
+                            // 如果这里是草地且没有物体，加入安全点列表
+                            if (!isOccupied) {
+                                safeSpots.push({ x: x * tileSize + 16, y: y * tileSize + 16 });
                             }
                         }
                     }
 
-                    // --- 玩家设置 ---
-                    player = this.physics.add.sprite(400, 400, 'player');
+                    // --- 寻找安全出生点 (关键修复) ---
+                    let spawnX = 400, spawnY = 400;
+                    if (safeSpots.length > 0) {
+                        // 随机选一个安全点
+                        const spot = safeSpots[Math.floor(Math.random() * safeSpots.length)];
+                        spawnX = spot.x;
+                        spawnY = spot.y;
+                    }
+
+                    // 创建玩家
+                    player = this.physics.add.sprite(spawnX, spawnY, 'player');
                     player.setCollideWorldBounds(true);
+                    // 稍微缩小玩家的碰撞体积，防止走路太容易卡住
+                    player.body.setSize(20, 20); 
+
                     this.physics.world.setBounds(0, 0, mapSize * tileSize, mapSize * tileSize);
-                    
-                    // 摄像机
                     this.cameras.main.startFollow(player, true);
                     this.cameras.main.setZoom(1.5);
 
-                    // 碰撞逻辑
+                    // 批量添加碰撞
                     objectsGroup.forEach(obj => {
                         this.physics.add.collider(player, obj.sprite);
                     });
@@ -145,14 +158,18 @@ const Game = () => {
                     marker = this.add.graphics();
                     marker.lineStyle(2, 0xffffff, 1);
                     
-                    // 控制
+                    // 输入控制
                     cursors = this.input.keyboard.createCursorKeys();
                     wasd = this.input.keyboard.addKeys({w:87, a:65, s:83, d:68});
 
-                    // 点击事件
-                    this.input.on('pointerdown', (pointer) => handleInput(this, pointer));
+                    // 鼠标点击
+                    this.input.on('pointerdown', (pointer) => {
+                        // 确保获得焦点
+                        window.focus();
+                        handleInput(this, pointer);
+                    });
 
-                    setDebugMsg('✅ 游戏就绪! 移动:WASD');
+                    setDebugMsg('✅ 游戏就绪! 点一下屏幕，然后用 WASD 移动');
                 }
 
                 function update() {
@@ -160,12 +177,19 @@ const Game = () => {
                     player.body.setVelocity(0);
                     const speed = 200;
                     
+                    // 移动逻辑
                     if (cursors.left.isDown || wasd.a.isDown) player.body.setVelocityX(-speed);
-                    if (cursors.right.isDown || wasd.d.isDown) player.body.setVelocityX(speed);
+                    else if (cursors.right.isDown || wasd.d.isDown) player.body.setVelocityX(speed);
+                    
                     if (cursors.up.isDown || wasd.w.isDown) player.body.setVelocityY(-speed);
-                    if (cursors.down.isDown || wasd.s.isDown) player.body.setVelocityY(speed);
+                    else if (cursors.down.isDown || wasd.s.isDown) player.body.setVelocityY(speed);
 
-                    // 高亮框
+                    // 如果有速度，归一化（防止斜向加速）
+                    if (player.body.velocity.x !== 0 || player.body.velocity.y !== 0) {
+                        player.body.velocity.normalize().scale(speed);
+                    }
+
+                    // 高亮框跟随鼠标
                     const worldPoint = this.input.activePointer.positionToCamera(this.cameras.main);
                     const tx = Math.floor(worldPoint.x / 32) * 32;
                     const ty = Math.floor(worldPoint.y / 32) * 32;
@@ -176,49 +200,61 @@ const Game = () => {
                 function handleInput(scene, pointer) {
                     const worldPoint = pointer.positionToCamera(scene.cameras.main);
                     
-                    // 简单的点击检测 (遍历所有物体，性能稍差但稳)
-                    // 找到点击范围内的物体
-                    const clickedObjIndex = objectsGroup.findIndex(item => 
-                        Phaser.Geom.Rectangle.Contains(item.sprite.getBounds(), worldPoint.x, worldPoint.y)
+                    // 检测点击是否命中了某个物体
+                    // 简单的距离检测或者矩形检测
+                    const clickedIndex = objectsGroup.findIndex(obj => 
+                        Phaser.Geom.Rectangle.Contains(obj.sprite.getBounds(), worldPoint.x, worldPoint.y)
                     );
 
                     if (pointer.leftButtonDown()) {
                         // 左键：破坏
-                        if (clickedObjIndex !== -1) {
-                            const item = objectsGroup[clickedObjIndex];
-                            if (item.type === 'water') return; // 水不能挖
+                        if (clickedIndex !== -1) {
+                            const obj = objectsGroup[clickedIndex];
+                            if (obj.type === 'water') return; // 水不能挖
 
-                            // 销毁物体
-                            item.sprite.destroy();
-                            objectsGroup.splice(clickedObjIndex, 1);
-                            
+                            // 简单的破坏动画
+                            scene.tweens.add({
+                                targets: obj.sprite, alpha: 0, duration: 100,
+                                onComplete: () => {
+                                    obj.sprite.destroy();
+                                    objectsGroup.splice(clickedIndex, 1); // 从数组移除
+                                }
+                            });
+
                             // 更新背包
                             setInventory(prev => {
                                 const n = { ...prev };
-                                if (item.type.includes('tree') || item.type.includes('wall')) n.wood++;
-                                else if (item.type.includes('rock')) n.stone++;
+                                if (obj.type.includes('tree') || obj.type.includes('wall')) n.wood++;
+                                else if (obj.type.includes('rock')) n.stone++;
                                 return n;
                             });
                         }
-                    } else if (pointer.rightButtonDown()) {
-                        // 右键：建造 (墙)
-                        if (clickedObjIndex === -1 && inventoryRef.current.wood > 0) {
+                    } 
+                    else if (pointer.rightButtonDown()) {
+                        // 右键：建造墙壁
+                        if (clickedIndex === -1 && inventoryRef.current.wood > 0) {
+                            // 对齐网格
                             const tx = Math.floor(worldPoint.x / 32) * 32 + 16;
                             const ty = Math.floor(worldPoint.y / 32) * 32 + 16;
                             
+                            // 检查玩家是否站在那里（防止把自己砌在墙里）
+                            if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) < 25) {
+                                setDebugMsg("⚠️ 不能在脚下建造！");
+                                return;
+                            }
+
                             const newWall = scene.physics.add.sprite(tx, ty, 'o_wall');
                             newWall.setImmovable(true);
                             scene.physics.add.collider(player, newWall);
-                            
                             objectsGroup.push({ sprite: newWall, type: 'o_wall' });
-                            
+
                             setInventory(prev => ({ ...prev, wood: prev.wood - 1 }));
                         }
                     }
                 }
 
             } catch (err) {
-                setDebugMsg(`❌ 崩溃: ${err.message}`);
+                setDebugMsg(`❌ 错误: ${err.message}`);
                 console.error(err);
             }
         };
@@ -234,7 +270,6 @@ const Game = () => {
         };
     }, []);
 
-    // 存档逻辑
     const saveGame = async () => {
         setDebugMsg('正在上传...');
         try {
@@ -247,7 +282,7 @@ const Game = () => {
         <div style={{ display: 'flex', width: '100vw', height: '100vh', background: '#000', overflow: 'hidden' }}>
             <div style={{ flex: 1, position: 'relative' }}>
                 <div id="phaser-game" style={{ width: '100%', height: '100%' }}></div>
-                <div style={{ position: 'absolute', top: 10, left: 10, color: '#0f0', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', fontSize: '14px', pointerEvents: 'none' }}>
+                <div style={{ position: 'absolute', top: 10, left: 10, color: '#0f0', background: 'rgba(0,0,0,0.8)', padding: '5px 10px', fontSize: '14px', pointerEvents: 'none', userSelect: 'none' }}>
                     状态: {debugMsg}
                 </div>
             </div>
@@ -263,6 +298,15 @@ const Game = () => {
                     </div>
                 </div>
                 <button onClick={saveGame} style={{ padding: '10px', background: '#0070f3', color: 'white', border: 'none', cursor: 'pointer' }}>上传存档</button>
+                <div style={{ marginTop: '20px', fontSize: '12px', color: '#888' }}>
+                    <p>🕹️ 操作指南：</p>
+                    <ul style={{ paddingLeft: '20px' }}>
+                        <li>点一下游戏区激活</li>
+                        <li>WASD 移动</li>
+                        <li>左键 破坏树/石</li>
+                        <li>右键 建造墙壁</li>
+                    </ul>
+                </div>
             </div>
         </div>
     );
