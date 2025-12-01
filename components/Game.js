@@ -6,11 +6,11 @@ const Game = () => {
     const gameRef = useRef(null);
     const isMountedRef = useRef(false);
     const [inventory, setInventory] = useState({ wood: 0, stone: 0 });
-    const [hotbar, setHotbar] = useState('wall_wood'); // 当前手中的方块
-    const [debugMsg, setDebugMsg] = useState('初始化...');
+    const [hotbar, setHotbar] = useState('wall_wood');
+    const [debugMsg, setDebugMsg] = useState('引擎初始化...');
     
     const inventoryRef = useRef(inventory);
-    const hotbarRef = useRef(hotbar); // 用于穿透闭包
+    const hotbarRef = useRef(hotbar);
 
     useEffect(() => { inventoryRef.current = inventory; }, [inventory]);
     useEffect(() => { hotbarRef.current = hotbar; }, [hotbar]);
@@ -21,87 +21,8 @@ const Game = () => {
         const initGame = async () => {
             if (!isMountedRef.current || gameRef.current) return;
 
+            // 动态导入 Phaser
             const Phaser = (await import('phaser')).default;
-
-            // --- 🎨 像素画素材定义 (16x16) ---
-            // 使用字符串矩阵来画图，拒绝抽象几何体！
-            const PixelArt = {
-                // 调色板
-                colors: {
-                    _: null, // 透明
-                    g: 0x4CAF50, d: 0x388E3C, // 浅绿/深绿
-                    w: 0x2196F3, l: 0x64B5F6, // 水/波光
-                    b: 0x795548, B: 0x3E2723, // 棕/深棕 (木头)
-                    s: 0x9E9E9E, S: 0x616161, // 灰/深灰 (石头)
-                    y: 0xFFEB3B, // 黄 (沙)
-                    r: 0xE91E63, // 红 (花)
-                    p: 0xF48FB1, // 粉 (猪/史莱姆)
-                    o: 0xFF9800, // 橙 (花蕊)
-                },
-                // 图案定义 (16x16)
-                textures: {
-                    't_grass': [
-                        'gggggggggggggggg',
-                        'gggdggggggggdggg',
-                        'gggggggggggggggg',
-                        'ggggdggggggggggg',
-                        'ggggggggggggdggg',
-                        'gggggggggggggggg',
-                        'gggdgggggggggggg',
-                        'ggggggggdggggggg',
-                    ],
-                    'o_tree': [ // 像一棵真的树
-                        '______dddd______',
-                        '_____ddggdd_____',
-                        '____ddggggdd____',
-                        '____ddggggdd____',
-                        '____ddggggdd____',
-                        '_____ddggdd_____',
-                        '______BBBB______',
-                        '______BBBB______',
-                    ],
-                    'o_rock': [
-                        '_____sssss______',
-                        '___sssssssss____',
-                        '__ssssSssssss___',
-                        '__sssSSSsssss___',
-                        '__ssssSssssss___',
-                        '___sssssssss____',
-                        '_____sssss______',
-                        '________________',
-                    ],
-                    'd_flower': [ // 花朵 (装饰)
-                        '________________',
-                        '______r_r_______',
-                        '_____r_o_r______',
-                        '______r_r_______',
-                        '_______g________',
-                        '______gdg_______',
-                        '_______g________',
-                        '_______g________',
-                    ],
-                    'o_wall_wood': [ // 木墙
-                        'BBBBBBBBBBBBBBBB',
-                        'bBbBbBbBbBbBbBbB',
-                        'bbbbbbbbbbbbbbbb',
-                        'BBBBBBBBBBBBBBBB',
-                        'bbbbbbbbbbbbbbbb',
-                        'bBbBbBbBbBbBbBbB',
-                        'bbbbbbbbbbbbbbbb',
-                        'BBBBBBBBBBBBBBBB',
-                    ],
-                    'm_slime': [ // 史莱姆怪物
-                        '________________',
-                        '______gggg______',
-                        '____gggggggg____',
-                        '___gggggggggg___',
-                        '___gBg____gBg___', // 眼睛
-                        '___gggggggggg___',
-                        '____gggggggg____',
-                        '________________',
-                    ]
-                }
-            };
 
             const config = {
                 type: Phaser.AUTO,
@@ -109,7 +30,7 @@ const Game = () => {
                 height: 600,
                 parent: 'phaser-game',
                 backgroundColor: '#111',
-                pixelArt: true, // 关键：开启像素模式
+                pixelArt: true, // 关键：像素完美模式
                 roundPixels: true,
                 scale: {
                     mode: Phaser.Scale.RESIZE,
@@ -119,244 +40,304 @@ const Game = () => {
                     default: 'arcade',
                     arcade: { debug: false }
                 },
-                scene: { preload, create, update }
+                scene: { preload: preload, create: create, update: update }
             };
 
             const game = new Phaser.Game(config);
             gameRef.current = game;
 
-            // --- 游戏内部变量 ---
+            // --- 游戏全局变量 ---
             let player, cursors, wasd;
-            let ghostBlock; // 幽灵方块
-            let objectsGroup, decorGroup, slimesGroup; // 物体组、装饰组、生物组
-            const mapSize = 80; // 更大的地图
-            const tileSize = 16; // 更精细的方块 (16px)
+            let ghostBlock;
+            let objectsGroup, decorGroup, slimesGroup;
+            const mapSize = 60; // 地图大小
+            const tileSize = 16; // 16x16 像素
 
+            // --- 1. 预加载 (留空，我们用程序生成) ---
             function preload() {
-                const g = this.make.graphics({ add: false });
-
-                // 1. 自动生成像素纹理
-                Object.entries(PixelArt.textures).forEach(([key, rows]) => {
-                    g.clear();
-                    rows.forEach((row, y) => {
-                        // 如果行数少于16，拉伸一下或者居中（这里简单处理，每行重复绘制2次高度模拟16px）
-                        // 为了简单，我们上面定义的其实是 8x16 或者 16x16 的半成品
-                        // 这里我们写一个像素绘制器，假设定义是 16x16 或者 8x16 放大
-                        for (let x = 0; x < row.length; x++) {
-                            const char = row[x];
-                            const color = PixelArt.colors[char];
-                            if (color !== undefined && color !== null) {
-                                g.fillStyle(color);
-                                // 我们的素材定义比较小，为了省事，纵向放大2倍
-                                g.fillRect(x, y * 2, 1, 2); 
-                            }
-                        }
-                    });
-                    g.generateTexture(key, 16, 16);
-                });
-
-                // 补充纯色纹理
-                g.clear(); g.fillStyle(0x2196F3); g.fillRect(0,0,16,16); g.generateTexture('t_water', 16, 16);
-                g.clear(); g.fillStyle(0xFFEB3B); g.fillRect(0,0,16,16); g.generateTexture('t_sand', 16, 16);
-                
-                // 玩家 (稍微复杂点)
-                g.clear();
-                g.fillStyle(0xFFC107); g.fillRect(2,2,12,12); // 身体
-                g.fillStyle(0x000000); g.fillRect(4,4,2,2); g.fillRect(10,4,2,2); // 眼睛
-                g.fillStyle(0xFFFFFF); g.fillRect(4,10,8,2); // 嘴巴
-                g.generateTexture('player', 16, 16);
+                // 可以在这里加载外部图片，但我们这次全靠代码画
             }
 
+            // --- 2. 创建世界 (核心逻辑) ---
             function create() {
-                setDebugMsg('生成地形中...');
-                
-                // 1. 地图生成
-                const noise = (x, y) => Math.sin(x * 0.1) + Math.sin(y * 0.1) + Math.random() * 0.1;
-                
-                // 组初始化
-                objectsGroup = this.physics.add.group({ immovable: true }); // 阻挡层
-                decorGroup = this.add.group(); // 装饰层 (花草)
-                slimesGroup = this.physics.add.group(); // 生物层
+                try {
+                    setDebugMsg('正在生成材质...');
+                    
+                    // --- A. 纹理生成器 (放在 create 里更安全) ---
+                    const g = this.make.graphics({ add: false });
+                    
+                    // 辅助画点函数
+                    const drawPixels = (key, colorMap, rows) => {
+                        g.clear();
+                        rows.forEach((row, y) => {
+                            for (let x = 0; x < row.length; x++) {
+                                const color = colorMap[row[x]];
+                                if (color !== undefined) {
+                                    g.fillStyle(color);
+                                    g.fillRect(x, y, 1, 1); // 1x1 像素绘制
+                                }
+                            }
+                        });
+                        g.generateTexture(key, 16, 16);
+                    };
 
-                for(let y=0; y<mapSize; y++) {
-                    for(let x=0; x<mapSize; x++) {
-                        const nx = x * 0.15;
-                        const ny = y * 0.15;
-                        const n = Math.sin(nx) * Math.cos(ny); // 简单的波浪噪声
+                    // 定义调色板
+                    const C = {
+                        _: null, // 透明
+                        g: 0x4CAF50, G: 0x2E7D32, // 草/深草
+                        w: 0x4fc3f7, W: 0x0288d1, // 浅水/深水
+                        b: 0x795548, B: 0x3E2723, // 木/深木
+                        s: 0x9E9E9E, S: 0x616161, // 石/深石
+                        y: 0xFFEB3B, // 沙
+                        r: 0xE91E63, // 花红
+                        p: 0xF48FB1, P: 0xAD1457 // 史莱姆粉/深粉
+                    };
 
-                        const posX = x * tileSize;
-                        const posY = y * tileSize;
+                    // 1. 草地
+                    drawPixels('t_grass', C, [
+                        'gggggggggggggggg',
+                        'ggGggggggggGgggg',
+                        'gggggggggggggggg',
+                        'ggggGggggggggggg',
+                        'ggggggggggggGggg',
+                        'gggggggggggggggg',
+                        'ggGggggggggggggg',
+                        'ggggggggGggggggg',
+                        'gggggggggggggggg', // 重复填满 16 行
+                        'gggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg',
+                        'gggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg', 'gggggggggggggggg'
+                    ]);
 
-                        // 地形判定
-                        if (n < -0.4) {
-                            // 水
-                            const water = this.add.image(posX, posY, 't_water').setOrigin(0);
-                            this.physics.add.existing(water, true);
-                            water.body.setImmovable(true);
-                            objectsGroup.add(water);
-                            water.setData('type', 'water');
-                        } else if (n < -0.2) {
-                            // 沙滩
-                            this.add.image(posX, posY, 't_sand').setOrigin(0);
-                        } else {
-                            // 草地
-                            this.add.image(posX, posY, 't_grass').setOrigin(0);
-                            
-                            // 随机生成物体
-                            const rand = Math.random();
-                            if (rand < 0.05) {
-                                const tree = objectsGroup.create(posX + 8, posY + 8, 'o_tree');
-                                tree.body.setSize(12, 12); // 碰撞体积略小
-                                tree.setData('type', 'tree');
-                            } else if (rand < 0.06) {
-                                const rock = objectsGroup.create(posX + 8, posY + 8, 'o_rock');
-                                rock.body.setSize(12, 12);
-                                rock.setData('type', 'rock');
-                            } else if (rand < 0.15) {
-                                // 装饰物 (花) - 无碰撞
-                                decorGroup.create(posX + 8, posY + 8, 'd_flower').setDepth(0);
-                            } else if (rand < 0.155) {
-                                // 史莱姆
-                                const slime = slimesGroup.create(posX + 8, posY + 8, 'm_slime');
-                                slime.setBounce(1);
-                                slime.setCollideWorldBounds(true);
-                                slime.setVelocity(Phaser.Math.Between(-20, 20), Phaser.Math.Between(-20, 20));
+                    // 2. 树木
+                    drawPixels('o_tree', C, [
+                        '_____GGG________',
+                        '____GGGGG_______',
+                        '___GGGGGGG______',
+                        '___GGGGGGG______',
+                        '____GGGGG_______',
+                        '_____BBB________',
+                        '_____BBB________',
+                        '_____BBB________',
+                        '_____BBB________', // 树干
+                        '________________', '________________', '________________',
+                        '________________', '________________', '________________', '________________'
+                    ]);
+
+                    // 3. 石头
+                    drawPixels('o_rock', C, [
+                        '______sss_______',
+                        '____sssssss_____',
+                        '___ssSssssss____',
+                        '___sSSssssss____',
+                        '___sssssssss____',
+                        '____sssssss_____',
+                        '______sss_______',
+                        '________________',
+                        '________________', '________________', '________________', '________________',
+                        '________________', '________________', '________________', '________________'
+                    ]);
+
+                    // 4. 木墙
+                    drawPixels('o_wall_wood', C, [
+                        'BBBBBBBBBBBBBBBB',
+                        'bBbBbBbBbBbBbBbB',
+                        'bbbbbbbbbbbbbbbb',
+                        'BBBBBBBBBBBBBBBB',
+                        'bbbbbbbbbbbbbbbb',
+                        'bBbBbBbBbBbBbBbB',
+                        'bbbbbbbbbbbbbbbb',
+                        'BBBBBBBBBBBBBBBB',
+                        'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb',
+                        'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb', 'bbbbbbbbbbbbbbbb'
+                    ]);
+
+                    // 5. 史莱姆
+                    drawPixels('m_slime', C, [
+                        '________________',
+                        '________________',
+                        '______pppp______',
+                        '____pppppppp____',
+                        '___pppppppppp___',
+                        '___pPp____pPp___', // 眼睛
+                        '___pppppppppp___',
+                        '____pppppppp____',
+                        '________________', '________________', '________________', '________________',
+                        '________________', '________________', '________________', '________________'
+                    ]);
+
+                    // 补全简单纹理
+                    g.clear(); g.fillStyle(C.w); g.fillRect(0,0,16,16); g.generateTexture('t_water', 16, 16);
+                    g.clear(); g.fillStyle(C.y); g.fillRect(0,0,16,16); g.generateTexture('t_sand', 16, 16);
+                    
+                    // 玩家
+                    g.clear(); 
+                    g.fillStyle(0xFFC107); g.fillRect(4,4,8,8); 
+                    g.fillStyle(0x000000); g.fillRect(5,5,2,2); g.fillRect(9,5,2,2);
+                    g.generateTexture('player', 16, 16);
+
+
+                    // --- B. 地图生成 ---
+                    setDebugMsg('正在构建地形...');
+                    
+                    // 物理组
+                    objectsGroup = this.physics.add.group({ immovable: true });
+                    decorGroup = this.add.group();
+                    slimesGroup = this.physics.add.group();
+
+                    const noise = (x, y) => Math.sin(x*0.15) + Math.cos(y*0.15) + Math.random()*0.1;
+
+                    for(let y=0; y<mapSize; y++) {
+                        for(let x=0; x<mapSize; x++) {
+                            const px = x * tileSize;
+                            const py = y * tileSize;
+                            const n = noise(x, y);
+
+                            if (n < -0.5) {
+                                // 水
+                                const water = this.add.image(px, py, 't_water').setOrigin(0);
+                                this.physics.add.existing(water, true);
+                                objectsGroup.add(water);
+                                water.setData('type', 'water');
+                            } else if (n < -0.3) {
+                                // 沙滩
+                                this.add.image(px, py, 't_sand').setOrigin(0);
+                            } else {
+                                // 草地
+                                this.add.image(px, py, 't_grass').setOrigin(0);
+                                
+                                // 生成物体
+                                const rand = Math.random();
+                                if (rand < 0.05) {
+                                    // 树 (中心点修正 +8)
+                                    const tree = objectsGroup.create(px+8, py+8, 'o_tree');
+                                    tree.body.setSize(10, 10);
+                                    tree.setData('type', 'tree');
+                                } else if (rand < 0.07) {
+                                    // 石
+                                    const rock = objectsGroup.create(px+8, py+8, 'o_rock');
+                                    rock.body.setSize(10, 10);
+                                    rock.setData('type', 'rock');
+                                } else if (rand < 0.08) {
+                                    // 史莱姆
+                                    const slime = slimesGroup.create(px+8, py+8, 'm_slime');
+                                    slime.setBounce(1);
+                                    slime.setCollideWorldBounds(true);
+                                }
                             }
                         }
                     }
+
+                    // --- C. 玩家与控制 ---
+                    player = this.physics.add.sprite(mapSize*tileSize/2, mapSize*tileSize/2, 'player');
+                    player.setCollideWorldBounds(true);
+                    player.setDepth(10);
+                    
+                    // 摄像机
+                    this.physics.world.setBounds(0, 0, mapSize*tileSize, mapSize*tileSize);
+                    this.cameras.main.startFollow(player, true);
+                    this.cameras.main.setZoom(2.5); // 适度缩放
+
+                    // 碰撞
+                    this.physics.add.collider(player, objectsGroup);
+                    this.physics.add.collider(slimesGroup, objectsGroup);
+                    this.physics.add.collider(player, slimesGroup, (p, s) => {
+                        const angle = Phaser.Math.Angle.Between(s.x, s.y, p.x, p.y);
+                        p.setVelocity(Math.cos(angle)*200, Math.sin(angle)*200);
+                    });
+
+                    // 预览块
+                    ghostBlock = this.add.image(0, 0, 'o_wall_wood').setAlpha(0.6).setDepth(20);
+
+                    // 输入
+                    cursors = this.input.keyboard.createCursorKeys();
+                    wasd = this.input.keyboard.addKeys({w:87, a:65, s:83, d:68, e:69});
+                    this.input.on('pointerdown', (pointer) => handleInput(this, pointer));
+
+                    // 史莱姆 AI
+                    this.time.addEvent({
+                        delay: 1500, loop: true,
+                        callback: () => slimesGroup.children.iterate(s => {
+                            if(s) s.setVelocity(Phaser.Math.Between(-40, 40), Phaser.Math.Between(-40, 40));
+                        })
+                    });
+
+                    setDebugMsg('✅ 游戏就绪! 移动:WASD 建造:右键');
+
+                } catch (err) {
+                    console.error(err);
+                    setDebugMsg(`❌ 崩溃: ${err.message}`);
                 }
-
-                // 2. 玩家
-                player = this.physics.add.sprite(mapSize*tileSize/2, mapSize*tileSize/2, 'player');
-                player.setCollideWorldBounds(true);
-                player.setDepth(10); // 玩家在最上层
-                player.body.setSize(10, 10); // 碰撞体积
-
-                // 3. 摄像机
-                this.physics.world.setBounds(0, 0, mapSize * tileSize, mapSize * tileSize);
-                this.cameras.main.startFollow(player, true, 0.1, 0.1);
-                this.cameras.main.setZoom(3); // 放大3倍，复古像素风！
-
-                // 4. 碰撞关系
-                this.physics.add.collider(player, objectsGroup);
-                this.physics.add.collider(slimesGroup, objectsGroup);
-                this.physics.add.collider(slimesGroup, slimesGroup);
-                this.physics.add.collider(player, slimesGroup, (p, s) => {
-                    // 简单的推开效果
-                    const angle = Phaser.Math.Angle.Between(s.x, s.y, p.x, p.y);
-                    p.setVelocity(Math.cos(angle)*200, Math.sin(angle)*200);
-                });
-
-                // 5. 建造预览 (Ghost Block)
-                ghostBlock = this.add.image(0, 0, 'o_wall_wood').setAlpha(0.5).setDepth(20);
-                
-                // 6. 控制
-                cursors = this.input.keyboard.createCursorKeys();
-                wasd = this.input.keyboard.addKeys({w:87, a:65, s:83, d:68, e:69});
-                
-                // 7. 交互
-                this.input.on('pointerdown', (pointer) => handleInput(this, pointer));
-                
-                // 8. 史莱姆 AI 跳跃逻辑
-                this.time.addEvent({
-                    delay: 2000,
-                    loop: true,
-                    callback: () => {
-                        slimesGroup.children.iterate((slime) => {
-                            if(slime) slime.setVelocity(Phaser.Math.Between(-30, 30), Phaser.Math.Between(-30, 30));
-                        });
-                    }
-                });
-
-                setDebugMsg('WASD移动 | 左键破坏 | 右键建造 | E键切换方块');
             }
 
             function update() {
                 if (!player) return;
-                
-                // 玩家移动
+
+                // 移动
                 player.body.setVelocity(0);
-                const speed = 100; // 像素越小，速度数值也要相应调小一点才自然
-                
+                const speed = 120;
                 if (cursors.left.isDown || wasd.a.isDown) player.body.setVelocityX(-speed);
                 else if (cursors.right.isDown || wasd.d.isDown) player.body.setVelocityX(speed);
                 
                 if (cursors.up.isDown || wasd.w.isDown) player.body.setVelocityY(-speed);
                 else if (cursors.down.isDown || wasd.s.isDown) player.body.setVelocityY(speed);
 
-                // 切换方块
+                // 切换物品
                 if (Phaser.Input.Keyboard.JustDown(wasd.e)) {
                     setHotbar(prev => prev === 'wall_wood' ? 'wall_rock' : 'wall_wood');
                 }
 
-                // 更新 Ghost Block 位置
-                const worldPoint = this.input.activePointer.positionToCamera(this.cameras.main);
-                const tx = Math.floor(worldPoint.x / 16) * 16 + 8; // 中心对齐 (16/2=8)
-                const ty = Math.floor(worldPoint.y / 16) * 16 + 8;
+                // 幽灵方块逻辑
+                const wp = this.input.activePointer.positionToCamera(this.cameras.main);
+                const tx = Math.floor(wp.x / 16) * 16 + 8;
+                const ty = Math.floor(wp.y / 16) * 16 + 8;
                 
-                ghostBlock.x = tx;
+                ghostBlock.x = tx; 
                 ghostBlock.y = ty;
                 
-                // 根据是否有材料改变 Ghost Block 颜色
-                const canBuild = inventoryRef.current.wood > 0; // 简化：假设都需要木头
-                ghostBlock.setTint(canBuild ? 0xFFFFFF : 0xFF0000);
-                ghostBlock.setTexture(hotbarRef.current === 'wall_wood' ? 'o_wall_wood' : 'o_rock'); // 借用rock图作为石墙
+                const canBuild = inventoryRef.current.wood > 0;
+                ghostBlock.setTint(canBuild ? 0xffffff : 0xff0000);
+                ghostBlock.setTexture(hotbarRef.current === 'wall_wood' ? 'o_wall_wood' : 'o_rock');
             }
 
             function handleInput(scene, pointer) {
-                const worldPoint = pointer.positionToCamera(scene.cameras.main);
-                
-                // 查找点击的物体
-                const clickedObj = objectsGroup.getChildren().find(obj => 
-                    Phaser.Geom.Rectangle.Contains(obj.getBounds(), worldPoint.x, worldPoint.y)
+                const wp = pointer.positionToCamera(scene.cameras.main);
+                // 查找点击的物理对象
+                const clickedObj = objectsGroup.getChildren().find(o => 
+                    Phaser.Geom.Rectangle.Contains(o.getBounds(), wp.x, wp.y)
                 );
 
                 if (pointer.leftButtonDown()) {
-                    // 左键：破坏
+                    // 破坏
                     if (clickedObj) {
                         const type = clickedObj.getData('type');
-                        if (type === 'water') return;
+                        if(type === 'water') return;
 
-                        // 粒子特效
-                        const particles = scene.add.particles(0, 0, type === 'tree' ? 't_grass' : 'o_rock', {
-                            x: clickedObj.x, y: clickedObj.y,
-                            speed: 50, lifespan: 300, scale: { start: 0.5, end: 0 },
-                            quantity: 5
-                        });
-                        scene.time.delayedCall(300, () => particles.destroy());
+                        // 简单的粒子
+                        const p = scene.add.rectangle(clickedObj.x, clickedObj.y, 8, 8, 0xFFFFFF);
+                        scene.tweens.add({targets:p, scale:0, duration:200, onComplete:()=>p.destroy()});
 
                         clickedObj.destroy();
-                        
                         setInventory(prev => {
-                            const n = { ...prev };
-                            if (type === 'tree' || type === 'wall') n.wood++;
-                            else if (type === 'rock') n.stone++;
+                            const n = {...prev};
+                            if(type==='tree'||type==='wall') n.wood++;
+                            else if(type==='rock') n.stone++;
                             return n;
                         });
                     }
                 } else if (pointer.rightButtonDown()) {
-                    // 右键：建造
+                    // 建造
                     if (!clickedObj && inventoryRef.current.wood > 0) {
-                        const tx = Math.floor(worldPoint.x / 16) * 16 + 8;
-                        const ty = Math.floor(worldPoint.y / 16) * 16 + 8;
-                        
-                        // 距离检测
-                        if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) > 50) {
-                            setDebugMsg("太远了！");
-                            return;
-                        }
-                        // 自身碰撞检测
-                        if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) < 12) {
-                            setDebugMsg("被挡住了！");
-                            return;
-                        }
+                        const tx = Math.floor(wp.x / 16) * 16 + 8;
+                        const ty = Math.floor(wp.y / 16) * 16 + 8;
+
+                        // 简单防卡死：不能在自己脚下建
+                        if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) < 12) return;
 
                         const type = hotbarRef.current === 'wall_wood' ? 'o_wall_wood' : 'o_rock';
                         const wall = objectsGroup.create(tx, ty, type);
                         wall.body.setImmovable(true);
                         wall.setData('type', 'wall');
-                        
-                        setInventory(prev => ({ ...prev, wood: prev.wood - 1 }));
+                        setInventory(prev => ({...prev, wood: prev.wood-1}));
                     }
                 }
             }
@@ -385,35 +366,27 @@ const Game = () => {
         <div style={{ display: 'flex', width: '100vw', height: '100vh', background: '#000', overflow: 'hidden' }}>
             <div style={{ flex: 1, position: 'relative' }}>
                 <div id="phaser-game" style={{ width: '100%', height: '100%' }}></div>
-                <div style={{ position: 'absolute', top: 10, left: 10, color: '#fff', textShadow: '1px 1px 0 #000', fontFamily: 'monospace', pointerEvents: 'none' }}>
+                <div style={{ position: 'absolute', top: 10, left: 10, color: '#fff', background: 'rgba(0,0,0,0.5)', padding: '5px' }}>
                     {debugMsg}
                 </div>
             </div>
             
-            <div style={{ width: '220px', background: '#2d2d2d', padding: '15px', color: '#eee', borderLeft: '4px solid #111', display: 'flex', flexDirection: 'column' }}>
-                <h3 style={{ borderBottom: '2px solid #555', paddingBottom: '5px' }}>🎒 背包</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', margin: '15px 0' }}>
-                    <div style={{ background: '#444', padding: '8px', borderRadius: '4px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '20px' }}>🪵</div>
-                        <div style={{ fontWeight: 'bold' }}>{inventory.wood}</div>
+            <div style={{ width: '220px', background: '#222', padding: '20px', color: '#eee', borderLeft: '2px solid #444' }}>
+                <h3>🎒 背包</h3>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', margin: '20px 0' }}>
+                    <div style={{ background: '#333', padding: '10px', textAlign: 'center' }}>
+                        <div>🪵</div><b>{inventory.wood}</b>
                     </div>
-                    <div style={{ background: '#444', padding: '8px', borderRadius: '4px', textAlign: 'center' }}>
-                        <div style={{ fontSize: '20px' }}>🪨</div>
-                        <div style={{ fontWeight: 'bold' }}>{inventory.stone}</div>
+                    <div style={{ background: '#333', padding: '10px', textAlign: 'center' }}>
+                        <div>🪨</div><b>{inventory.stone}</b>
                     </div>
                 </div>
-                
-                <div style={{ marginTop: 'auto', background: '#333', padding: '10px', borderRadius: '4px' }}>
-                    <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '5px' }}>当前建造:</div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <div style={{ width: '32px', height: '32px', background: hotbar === 'wall_wood' ? '#795548' : '#9E9E9E', border: '2px solid #fff' }}></div>
-                        <div>{hotbar === 'wall_wood' ? '木墙' : '石墙'}</div>
-                    </div>
-                    <div style={{ fontSize: '10px', color: '#888', marginTop: '5px' }}>(按 E 切换)</div>
+                <div style={{ marginTop: 'auto', background: '#333', padding: '10px' }}>
+                    <div>当前: {hotbar === 'wall_wood' ? '木墙' : '石墙'}</div>
+                    <small>(按 E 切换)</small>
                 </div>
-
-                <button onClick={saveGame} style={{ marginTop: '15px', padding: '10px', background: '#0070f3', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
-                    ☁️ 保存进度
+                <button onClick={saveGame} style={{ marginTop: '20px', width: '100%', padding: '10px', background: '#0070f3', color: 'white', border: 'none', cursor: 'pointer' }}>
+                    保存进度
                 </button>
             </div>
         </div>
