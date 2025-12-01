@@ -7,7 +7,7 @@ const Game = () => {
     const isMountedRef = useRef(false);
     const [inventory, setInventory] = useState({ wood: 0, stone: 0 });
     const [hotbar, setHotbar] = useState('wall_wood');
-    const [debugMsg, setDebugMsg] = useState('引擎初始化...');
+    const [debugMsg, setDebugMsg] = useState('初始化...');
     
     const inventoryRef = useRef(inventory);
     const hotbarRef = useRef(hotbar);
@@ -46,23 +46,20 @@ const Game = () => {
 
             let player, cursors, wasd;
             let ghostBlock;
-            // 关键修复：拆分物理组，防止类型冲突
             let waterGroup, obstaclesGroup, slimesGroup;
             const mapSize = 60;
             const tileSize = 16;
 
             function create() {
                 try {
-                    setDebugMsg('正在绘制素材...');
+                    setDebugMsg('绘制素材...');
                     const g = this.make.graphics({ add: false });
                     
-                    // --- 1. 安全的像素绘制器 ---
                     const drawPixels = (key, colorMap, rows) => {
                         g.clear();
                         for (let y = 0; y < rows.length; y++) {
                             const row = rows[y];
                             for (let x = 0; x < row.length; x++) {
-                                // 修复：使用 charAt 防止索引访问在某些环境下失效
                                 const char = row.charAt(x); 
                                 const color = colorMap[char];
                                 if (color !== undefined && color !== null) {
@@ -82,10 +79,9 @@ const Game = () => {
                         s: 0x9E9E9E, S: 0x616161, // 石
                         y: 0xFFEB3B, // 沙
                         p: 0xF48FB1, P: 0xAD1457, // 史莱姆
-                        k: 0x000000, Y: 0xFFC107  // 玩家
+                        Y: 0xFFC107, K: 0x000000  // 玩家
                     };
 
-                    // 定义素材
                     drawPixels('t_grass', C, [
                         'gggggggggggggggg','ggGggggggggGgggg','gggggggggggggggg','ggggGggggggggggg',
                         'ggggggggggggGggg','gggggggggggggggg','ggGggggggggggggg','ggggggggGggggggg',
@@ -116,6 +112,7 @@ const Game = () => {
                         '________________','________________','________________','________________',
                         '________________','________________','________________','________________'
                     ]);
+                    // 玩家
                     drawPixels('player', C, [
                         '________________','____YYYYYYYY____','____YYYYYYYY____','____YYYYYYYY____',
                         '____YKYYYYKY____','____YYYYYYYY____','____YYYYYYYY____','____YYYYYYYY____',
@@ -129,12 +126,12 @@ const Game = () => {
                     // --- 2. 构建地图 ---
                     setDebugMsg('生成地形...');
                     
-                    // 修复：创建三个独立的组，避免混用
-                    waterGroup = this.physics.add.staticGroup(); // 静态组：专门放水
-                    obstaclesGroup = this.physics.add.group({ immovable: true }); // 动态组：放树/墙
+                    waterGroup = this.physics.add.staticGroup();
+                    obstaclesGroup = this.physics.add.group({ immovable: true });
                     slimesGroup = this.physics.add.group();
 
                     const noise = (x, y) => Math.sin(x*0.15) + Math.cos(y*0.15);
+                    const safeSpawns = []; // 记录安全坐标
 
                     for(let y=0; y<mapSize; y++) {
                         for(let x=0; x<mapSize; x++) {
@@ -143,57 +140,79 @@ const Game = () => {
                             const n = noise(x, y) + Math.random()*0.1;
 
                             if (n < -0.6) {
-                                // 水 (加入 waterGroup)
                                 waterGroup.create(px, py, 't_water').setOrigin(0).refreshBody();
                             } else if (n < -0.4) {
                                 this.add.image(px, py, 't_sand').setOrigin(0);
                             } else {
                                 this.add.image(px, py, 't_grass').setOrigin(0);
-                                const r = Math.random();
                                 
-                                // 生成物体 (加入 obstaclesGroup)
+                                // 这里是草地，可能是安全的
+                                let isSafe = true;
+
+                                const r = Math.random();
                                 if (r < 0.05) {
                                     const tree = obstaclesGroup.create(px+8, py+8, 'o_tree');
                                     tree.body.setSize(10, 10);
                                     tree.setData('type', 'tree');
+                                    isSafe = false;
                                 } else if (r < 0.07) {
                                     const rock = obstaclesGroup.create(px+8, py+8, 'o_rock');
                                     rock.body.setSize(10, 10);
                                     rock.setData('type', 'rock');
+                                    isSafe = false;
                                 } else if (r < 0.08) {
                                     const slime = slimesGroup.create(px+8, py+8, 'm_slime');
                                     slime.setBounce(1);
                                     slime.setCollideWorldBounds(true);
+                                    // 史莱姆不算障碍，玩家可以挤开它
                                 }
+
+                                if(isSafe) safeSpawns.push({x: px + 8, y: py + 8});
                             }
                         }
                     }
 
-                    // --- 3. 玩家与控制 ---
-                    player = this.physics.add.sprite(mapSize*tileSize/2, mapSize*tileSize/2, 'player');
+                    // --- 3. 玩家出生逻辑 (修复点) ---
+                    // 默认中心，但如果中心不安全，就从 safeSpawns 里选一个
+                    let spawnX = mapSize * tileSize / 2;
+                    let spawnY = mapSize * tileSize / 2;
+
+                    if (safeSpawns.length > 0) {
+                        // 随机选一个安全点，或者选中间的一个
+                        const spot = safeSpawns[Math.floor(safeSpawns.length / 2)];
+                        spawnX = spot.x;
+                        spawnY = spot.y;
+                    }
+
+                    player = this.physics.add.sprite(spawnX, spawnY, 'player');
                     player.setCollideWorldBounds(true);
                     player.setDepth(10);
+                    player.body.setSize(12, 12); // 稍微减小碰撞体积，手感更好
 
                     this.physics.world.setBounds(0, 0, mapSize*tileSize, mapSize*tileSize);
                     this.cameras.main.startFollow(player, true);
                     this.cameras.main.setZoom(2.5);
 
-                    // 碰撞设置 (分别设置，更稳定)
+                    // 碰撞逻辑
                     this.physics.add.collider(player, waterGroup);
                     this.physics.add.collider(player, obstaclesGroup);
                     this.physics.add.collider(slimesGroup, waterGroup);
                     this.physics.add.collider(slimesGroup, obstaclesGroup);
-                    
                     this.physics.add.collider(player, slimesGroup, (p, s) => {
-                         if(s.body.touching.up) s.setVelocityY(50);
-                         else if(s.body.touching.down) s.setVelocityY(-50);
+                         const angle = Phaser.Math.Angle.Between(s.x, s.y, p.x, p.y);
+                         p.setVelocity(Math.cos(angle)*100, Math.sin(angle)*100);
                     });
 
                     ghostBlock = this.add.image(0, 0, 'o_wall_wood').setAlpha(0.6).setDepth(20);
 
+                    // 输入控制 (确保在这里初始化)
                     cursors = this.input.keyboard.createCursorKeys();
                     wasd = this.input.keyboard.addKeys({w:87, a:65, s:83, d:68, e:69});
-                    this.input.on('pointerdown', (pointer) => handleInput(this, pointer));
+                    this.input.on('pointerdown', (pointer) => {
+                        // 点击时强制聚焦，防止按键无效
+                        window.focus();
+                        handleInput(this, pointer);
+                    });
 
                     // 史莱姆 AI
                     this.time.addEvent({
@@ -208,7 +227,7 @@ const Game = () => {
                         }
                     });
 
-                    setDebugMsg('✅ 就绪! WASD移动 左键破坏 右键建造');
+                    setDebugMsg('✅ 游戏开始! 点击屏幕激活控制');
 
                 } catch (err) {
                     console.error(err);
@@ -221,14 +240,18 @@ const Game = () => {
 
                 player.body.setVelocity(0);
                 const speed = 120;
-                if (cursors.left.isDown || wasd.a.isDown) player.body.setVelocityX(-speed);
-                else if (cursors.right.isDown || wasd.d.isDown) player.body.setVelocityX(speed);
                 
-                if (cursors.up.isDown || wasd.w.isDown) player.body.setVelocityY(-speed);
-                else if (cursors.down.isDown || wasd.s.isDown) player.body.setVelocityY(speed);
+                // 确保 wasd 和 cursors 都存在再检测
+                if (cursors && wasd) {
+                    if (cursors.left.isDown || wasd.a.isDown) player.body.setVelocityX(-speed);
+                    else if (cursors.right.isDown || wasd.d.isDown) player.body.setVelocityX(speed);
+                    
+                    if (cursors.up.isDown || wasd.w.isDown) player.body.setVelocityY(-speed);
+                    else if (cursors.down.isDown || wasd.s.isDown) player.body.setVelocityY(speed);
 
-                if (Phaser.Input.Keyboard.JustDown(wasd.e)) {
-                    setHotbar(prev => prev === 'wall_wood' ? 'wall_rock' : 'wall_wood');
+                    if (Phaser.Input.Keyboard.JustDown(wasd.e)) {
+                        setHotbar(prev => prev === 'wall_wood' ? 'wall_rock' : 'wall_wood');
+                    }
                 }
 
                 const wp = this.input.activePointer.positionToCamera(this.cameras.main);
@@ -243,7 +266,6 @@ const Game = () => {
             function handleInput(scene, pointer) {
                 const wp = pointer.positionToCamera(scene.cameras.main);
                 
-                // 查找点击对象 (分别查找两个组)
                 let clickedObj = obstaclesGroup.getChildren().find(o => 
                     Phaser.Geom.Rectangle.Contains(o.getBounds(), wp.x, wp.y)
                 );
@@ -252,7 +274,6 @@ const Game = () => {
                     if (clickedObj) {
                         const type = clickedObj.getData('type');
                         
-                        // 特效
                         const p = scene.add.rectangle(clickedObj.x, clickedObj.y, 8, 8, 0xFFFFFF);
                         scene.tweens.add({targets:p, scale:0, duration:200, onComplete:()=>p.destroy()});
                         
@@ -265,7 +286,6 @@ const Game = () => {
                         });
                     }
                 } else if (pointer.rightButtonDown()) {
-                    // 确保不点到水、不点到现有物体
                     const isWater = waterGroup.getChildren().some(w => 
                          Phaser.Geom.Rectangle.Contains(w.getBounds(), wp.x, wp.y)
                     );
@@ -273,7 +293,9 @@ const Game = () => {
                     if (!clickedObj && !isWater && inventoryRef.current.wood > 0) {
                         const tx = Math.floor(wp.x / 16) * 16 + 8;
                         const ty = Math.floor(wp.y / 16) * 16 + 8;
-                        if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) < 12) return;
+                        
+                        // 防止卡住自己：如果玩家和新墙重叠，不让建
+                        if (Phaser.Math.Distance.Between(player.x, player.y, tx, ty) < 14) return;
 
                         const type = hotbarRef.current === 'wall_wood' ? 'o_wall_wood' : 'o_rock';
                         const wall = obstaclesGroup.create(tx, ty, type);
